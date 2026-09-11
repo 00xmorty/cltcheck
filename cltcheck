@@ -1,0 +1,98 @@
+#!/bin/zsh
+# CLTCheck: value-free, read-only developer-tool preflight.
+
+probe() {
+  case "$1" in
+    platform) /usr/bin/uname -s ;;
+    selected) /usr/bin/env -u DEVELOPER_DIR /usr/bin/xcode-select -p 2>/dev/null ;;
+    clang) /usr/bin/xcrun --no-cache --sdk macosx --find clang 2>/dev/null ;;
+    sdk) /usr/bin/xcrun --no-cache --sdk macosx --show-sdk-path 2>/dev/null ;;
+  esac
+}
+
+main() {
+  emulate -L zsh
+  local require_xcode=0
+  case "${1-}" in
+    --help|-h)
+      print -r -- 'Usage: cltcheck [--require-xcode | --help | --version]'
+      print -r -- 'Read-only macOS developer-tool preflight. No tool execution or repair.'
+      print -r -- 'Exit: 0 checks passed; 1 observed problem; 2 unknown/unsupported/usage.'
+      return 0 ;;
+    --version) print -r -- 'cltcheck 0.1.0'; return 0 ;;
+    --require-xcode) require_xcode=1 ;;
+    '') ;;
+    *) print -r -- 'UNKNOWN: unsupported argument; use --help'; return 2 ;;
+  esac
+  if (( $# > 1 )); then
+    print -r -- 'UNKNOWN: too many arguments; use --help'; return 2
+  fi
+  if [[ "$(probe platform)" != Darwin ]]; then
+    print -r -- 'UNKNOWN: live checks require macOS.'; return 2
+  fi
+  local selected effective clang sdk
+  local result=0 override=0
+  print -r -- 'CLTCheck — developer-tool preflight (paths and raw errors omitted)'
+  if selected=$(probe selected) && [[ -n "$selected" ]]; then
+    if [[ -d "$selected" ]]; then
+      print -r -- 'PASS: system developer selection is an existing directory.'
+    else
+      print -r -- 'FAIL: system developer selection points to a missing directory.'
+      result=1
+    fi
+  else
+    print -r -- 'UNKNOWN: system developer selection could not be read.'
+    result=2
+  fi
+  effective="$selected"
+  if (( ${+DEVELOPER_DIR} )); then
+    override=1
+    effective="$DEVELOPER_DIR"
+    print -r -- 'NOTE: DEVELOPER_DIR is set and overrides system selection for xcrun.'
+    if [[ -z "$effective" ]]; then
+      print -r -- 'UNKNOWN: empty DEVELOPER_DIR; unset it in your shell and compare.'
+      result=2
+    elif [[ ! -d "$effective" ]]; then
+      print -r -- 'FAIL: DEVELOPER_DIR points to a missing directory.'
+      (( result == 0 )) && result=1
+    fi
+  else
+    print -r -- 'PASS: no DEVELOPER_DIR override.'
+  fi
+  # xcrun accepts an Xcode app bundle as well as Contents/Developer.
+  if [[ -d "$effective/Contents/Developer" ]]; then
+    effective="$effective/Contents/Developer"
+  fi
+  if (( require_xcode )); then
+    if [[ -n "$effective" && -x "$effective/usr/bin/xcodebuild" && -d "$effective/Platforms" ]]; then
+      print -r -- 'PASS: full-Xcode layout found (license/first-launch state not checked).'
+    else
+      print -r -- 'FAIL: full-Xcode layout not found; standalone CLT is insufficient for this request.'
+      (( result == 0 )) && result=1
+    fi
+  fi
+  if clang=$(probe clang) && [[ -n "$clang" && -f "$clang" && -x "$clang" ]]; then
+    print -r -- 'PASS: xcrun resolves an executable clang file (not executed).'
+  else
+    print -r -- 'UNKNOWN: clang lookup failed or returned an inaccessible executable.'
+    result=2
+  fi
+  if sdk=$(probe sdk) && [[ -n "$sdk" && -d "$sdk" ]]; then
+    print -r -- 'PASS: xcrun resolves an existing macOS SDK directory.'
+  else
+    print -r -- 'UNKNOWN: macOS SDK lookup failed or returned an inaccessible directory.'
+    result=2
+  fi
+  if (( result != 0 )); then
+    (( override )) && print -r -- 'NEXT: compare manually with: env -u DEVELOPER_DIR zsh ./cltcheck'
+    print -r -- 'NEXT: inspect xcode-select -p locally; review Apple command-line tools settings.'
+    print -r -- 'NEXT: if CLT is absent, consider xcode-select --install manually; nothing was installed.'
+    print -r -- 'NOTE: failed lookups alone do not prove missing CLT; permissions, selection or setup may be responsible.'
+  fi
+  print -r -- 'LIMIT: no build, Git, license, SDK integrity or first-launch verification; no automatic fixes.'
+  return "$result"
+}
+
+if [[ "${ZSH_EVAL_CONTEXT}" == toplevel ]]; then
+  main "$@"
+fi

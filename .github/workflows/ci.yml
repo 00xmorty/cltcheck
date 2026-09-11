@@ -1,0 +1,38 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Unpack Linux test shell without root
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/zsh-packages" "$RUNNER_TEMP/zsh-root"
+          cd "$RUNNER_TEMP/zsh-packages"
+          apt-get download zsh zsh-common
+          for package in ./*.deb; do dpkg-deb -x "$package" "$RUNNER_TEMP/zsh-root"; done
+          printf '%s\n' "$RUNNER_TEMP/zsh-root/usr/bin" >> "$GITHUB_PATH"
+      - name: Syntax and unit tests
+        run: |
+          zsh -n cltcheck
+          python3 -m unittest discover -s tests -v
+      - name: Real CLI smoke
+        shell: bash
+        run: |
+          zsh ./cltcheck --help
+          zsh ./cltcheck --version
+          set +e
+          zsh ./cltcheck
+          rc=$?
+          set -e
+          if [[ "$RUNNER_OS" == Linux ]]; then test "$rc" = 2; else test "$rc" = 0; fi
